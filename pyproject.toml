@@ -1,0 +1,19 @@
+[project]
+name = "kingpin"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [{ name = "Martin Hansen", email = "dontbeevilpls@gmail.com" }]
+requires-python = ">=3.13"
+dependencies = ["fastmcp", "pydantic>=2.11.7"]
+
+[project.scripts]
+kingpin = "kingpin:main"
+pinctl = "pinctl:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["ruff>=0.12.1", "ty>=0.0.1a12"]
