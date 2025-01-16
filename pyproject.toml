@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools", "wheel", "setuptools_scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kingpin"
+authors = [{ name = "Martin Hansen", email = "dontbeevilpls@gmail.com" }]
+dynamic = ["version"]
+dependencies = [
+    "geopy==2.4.*",
+    "googlemaps==4.10.*",
+    "openai==1.59.*",
+    "scrapegraphai==1.37.*",
+    "typer==0.15.*",
+]
+
+[tool.setuptools_scm]
+version_scheme = "guess-next-dev"
+local_scheme = "dirty-tag"
+
+[project.scripts]
+kingpin = "cli.main:app"
+
+[tool.mypy]
+ignore_missing_imports = true

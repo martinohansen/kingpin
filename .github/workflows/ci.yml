@@ -1,0 +1,34 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: make install-deps
+
+      - name: Run black
+        run: make format
+
+      - name: Run mypy
+        run: make type-check
+
+      - name: Run ruff
+        run: make lint
+
+      - name: Install package
+        run: make install
+
+      - name: Run unittests
+        run: make test

@@ -1,0 +1,6 @@
+data/
+*.db
+
+# Python
+*egg-info/
+*__pycache__/
