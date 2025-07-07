@@ -8,39 +8,33 @@ from fastmcp.utilities.logging import get_logger
 from .mcp import PinProvider
 from .pin import PinServer
 
-
-def main():
-    # Initialize the server
-    app = FastMCP(
-        "kingpin",
-        instructions="""
+app = FastMCP(
+    "kingpin",
+    instructions="""
 Kingpin provides tools for interacting with your Google Maps pins and saved
 places.
 """,
-    )
+)
 
-    path = str(os.getenv("KINGPIN_DATA_PATH", "."))
+
+def main():
+    logger = get_logger("kingpin")
+
+    path = Path(os.getenv("KINGPIN_DATA_PATH", "."))
     if len(sys.argv) > 1:
-        path = sys.argv[1]
+        path = Path(sys.argv[1])
 
-    # Convert directory path to list of JSON files
-    data_path = Path(path)
-    if not data_path.exists():
-        print(f"Data path does not exist: {data_path}", file=sys.stderr)
+    # Read all JSON files at path
+    files = list(path.rglob("*.json"))
+    if not files:
+        logger.error("no files at %s", path)
         sys.exit(1)
-        
-    json_files = list(data_path.rglob("*.json"))
-    if not json_files:
-        print(f"No JSON files found in {data_path}", file=sys.stderr)
-        sys.exit(1)
-        
-    file_paths = [str(f) for f in json_files]
 
     # Initialize the pin server
-    pin_server = PinServer(file_paths, get_logger("pin_server"))
+    ps = PinServer(files, logger)
 
     # Initialize the pin provider tools
-    PinProvider(app, pin_server)
+    PinProvider(app, ps)
 
     # Run the MCP server
     app.run(transport="http")

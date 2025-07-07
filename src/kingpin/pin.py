@@ -2,64 +2,54 @@ import json
 import logging
 from pathlib import Path
 from typing import List, Union
+from difflib import SequenceMatcher
 
 from pydantic import ValidationError
 
-from .models import GeoJsonFeature, GeoJsonFormat, Pin, TakeoutPlace, MapListFormat, MapListItem, PinList
+from .models import (
+    GeoJsonFeature,
+    GeoJsonFormat,
+    MapListFormat,
+    MapListItem,
+    Pin,
+    PinList,
+    TakeoutPlace,
+)
 
 
 class PinServer:
     """Manages Google Takeout saved places data"""
 
-    def __init__(self, file_paths: List[str], logger: logging.Logger):
-        self.logger = logger
+    def __init__(self, files: List[Path], logger: logging.Logger):
+        self.logger = logger.getChild("PinServer")
         self.pins: List[Pin] = []
         self.lists: List[PinList] = []
-        self.load_data(file_paths)
 
-    def load_data(self, file_paths: List[str]) -> None:
+        # Load pins from files at init
+        self.load_data(files)
+
+    def load_data(self, file_paths: List[Path]) -> None:
         """Load saved places from specified JSON files"""
-        if not file_paths:
-            self.logger.error("No file paths provided")
-            return
-
-        self.logger.info(f"Found {len(file_paths)} JSON files to process")
         all_pins = []
         all_lists = []
 
         for file_path in file_paths:
-            json_file = Path(file_path)
-            if not json_file.exists():
-                self.logger.warning(f"File does not exist: {json_file}")
-                continue
-                
-            self.logger.info(f"Loading data from: {json_file}")
-            try:
-                with open(json_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
 
-                # Use filename (without extension) as list name
-                list_name = json_file.stem
-                pins_from_file = self._parse_places_data(data, list_name)
-                all_pins.extend(pins_from_file)
-                
-                # Create PinList object
-                pin_list = PinList(name=list_name, type="custom")
-                all_lists.append(pin_list)
-                
-                self.logger.info(
-                    f"Loaded {len(pins_from_file)} pins from {json_file.name} into list '{list_name}'"
-                )
+            # Use filename (without extension) as list name
+            list_name = file_path.stem
+            pins_from_file = self._parse_places_data(data, list_name)
+            all_pins.extend(pins_from_file)
 
-            except Exception as e:
-                self.logger.warning(f"Error loading data from {json_file}: {e}")
-                continue
+            # Create PinList object
+            pin_list = PinList(name=list_name, type="custom")
+            all_lists.append(pin_list)
+
+            self.logger.info("loaded %d pins from %s", len(pins_from_file), file_path)
 
         self.pins = all_pins
         self.lists = all_lists
-        self.logger.info(
-            f"Total loaded: {len(self.pins)} pins from {len(file_paths)} files"
-        )
 
     def _parse_places_data(self, data: Union[dict, list], list_name: str) -> List[Pin]:
         """Parse Google Takeout places data into Pin objects using Pydantic"""
@@ -109,21 +99,21 @@ class PinServer:
     def _convert_geojson_to_pin(self, feature: GeoJsonFeature, list_name: str) -> Pin:
         """Convert GeoJSON feature to Pin"""
         coords = feature.geometry.coordinates
-        
+
         # Try to get name from nested location first, then from top level
         name = "Unknown"
         if feature.properties.location and feature.properties.location.name:
             name = feature.properties.location.name
         elif feature.properties.name:
             name = feature.properties.name
-        
+
         # Try to get address from nested location first, then from top level
         address = None
         if feature.properties.location and feature.properties.location.address:
             address = feature.properties.location.address
         elif feature.properties.address:
             address = feature.properties.address
-        
+
         return Pin(
             name=name,
             address=address,
@@ -154,7 +144,7 @@ class PinServer:
         if item.place:
             address = item.place.singleLineAddress
             place_id = item.place.mid
-        
+
         # Extract URL from viewer data
         if item.viewer:
             url = item.viewer.url
@@ -171,7 +161,9 @@ class PinServer:
             list_name=list_name,
         )
 
-    def _convert_takeout_to_pin(self, takeout_place: TakeoutPlace, list_name: str) -> Pin:
+    def _convert_takeout_to_pin(
+        self, takeout_place: TakeoutPlace, list_name: str
+    ) -> Pin:
         """Convert TakeoutPlace to Pin"""
         # Handle coordinates conversion from E7 format
         latitude = None
@@ -197,9 +189,10 @@ class PinServer:
         )
 
     def search_places(self, query: str, limit: int = 10) -> List[Pin]:
-        """Search places by name, address, or notes"""
+        """Search places by name, address, or notes with fuzzy matching"""
         query_lower = query.lower()
-        results = []
+        exact_results = []
+        fuzzy_results = []
 
         for place in self.pins:
             # Search in name, address, and notes
@@ -214,13 +207,28 @@ class PinServer:
                 )
             ).lower()
 
+            # Exact substring match gets priority
             if query_lower in searchable_text:
-                results.append(place)
+                exact_results.append(place)
+            else:
+                # Fuzzy matching for names
+                name_similarity = SequenceMatcher(None, query_lower, place.name.lower()).ratio()
+                if name_similarity > 0.5:  # 50% similarity threshold
+                    fuzzy_results.append((place, name_similarity))
+                # Also check individual words
+                elif any(word in place.name.lower() for word in query_lower.split()):
+                    fuzzy_results.append((place, 0.4))  # Lower score for word matches
 
-            if len(results) >= limit:
+            if len(exact_results) >= limit:
                 break
 
-        return results
+        # Sort fuzzy results by similarity
+        fuzzy_results.sort(key=lambda x: x[1], reverse=True)
+        
+        # Combine results: exact matches first, then fuzzy matches
+        combined_results = exact_results + [match[0] for match in fuzzy_results]
+        
+        return combined_results[:limit]
 
     def get_places_near(
         self, lat: float, lng: float, radius_km: float = 10
@@ -251,7 +259,7 @@ class PinServer:
     def get_pins_by_list(self, list_name: str) -> List[Pin]:
         """Get all pins from a specific list"""
         return [pin for pin in self.pins if pin.list_name == list_name]
-        
+
     def get_list_names(self) -> List[str]:
         """Get all unique list names"""
         return [pin_list.name for pin_list in self.lists]
