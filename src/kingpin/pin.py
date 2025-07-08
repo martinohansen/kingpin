@@ -263,3 +263,17 @@ class PinServer:
     def get_list_names(self) -> List[str]:
         """Get all unique list names"""
         return [pin_list.name for pin_list in self.lists]
+    
+    def get_pin_by_place_id(self, place_id: str) -> Pin | None:
+        """Get pin by Google Maps place ID"""
+        for pin in self.pins:
+            if pin.place_id == place_id:
+                return pin
+        return None
+    
+    def get_pin_by_exact_name(self, name: str) -> Pin | None:
+        """Get pin by exact name match"""
+        for pin in self.pins:
+            if pin.name == name:
+                return pin
+        return None

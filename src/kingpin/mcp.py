@@ -1,5 +1,3 @@
-from difflib import SequenceMatcher
-
 from fastmcp import FastMCP
 
 from .pin import PinServer
@@ -13,8 +11,7 @@ class PinProvider:
         # Register tools with the MCP server
         mcp.tool(self.list_lists)
         mcp.tool(self.list_pins)
-        mcp.tool(self.search_pins)
-        mcp.tool(self.get_pin_details)
+        mcp.tool(self.get_pins)
         mcp.tool(self.find_pins_near)
 
     def list_lists(self) -> str:
@@ -24,12 +21,13 @@ class PinProvider:
         if not lists:
             return "No lists found."
 
-        result = f"{len(lists)} lists:\n"
+        result = f"{len(lists)} lists: "
+        list_items = []
         for i, pin_list in enumerate(lists, 1):
             pin_count = len(self.ps.get_pins_by_list(pin_list.name))
-            result += f"{i}. {pin_list.name} ({pin_count})\n"
+            list_items.append(f"{i}.{pin_list.name}({pin_count})")
 
-        return result
+        return result + " | ".join(list_items)
 
     def list_pins(
         self,
@@ -77,140 +75,101 @@ class PinProvider:
 
         # List pins
         for i, place in enumerate(places, offset + 1):
-            result += f"{i}. {place.name}"
+            if place.place_id:
+                result += f"{i}. {place.name} (ID:{place.place_id})"
+            else:
+                result += f"{i}. {place.name} (No ID)"
             if not list_name:
                 result += f" ({place.list_name})"
-            result += "\n"
 
+            details = []
             if place.address:
-                result += f"   Address: {place.address}\n"
+                details.append(f"Addr: {place.address}")
             if place.notes:
-                result += f"   Notes: {place.notes}\n"
-
+                details.append(f"Notes: {place.notes}")
             if with_links:
                 if place.url:
-                    result += f"   Link: {place.url}\n"
+                    details.append(f"Link: {place.url}")
                 elif place.latitude and place.longitude:
-                    result += f"   Maps: https://maps.google.com/?q={place.latitude},{place.longitude}\n"
+                    details.append(
+                        f"Maps: https://maps.google.com/?q={place.latitude},{place.longitude}"
+                    )
 
+            if details:
+                result += f" | {' | '.join(details)}"
             result += "\n"
 
         return result.rstrip()
 
-    def search_pins(
-        self, query: str, limit: int = 30, offset: int = 0, with_links: bool = False
+    def get_pins(
+        self,
+        place_ids: list[str] | None = None,
+        names: list[str] | None = None,
+        with_links: bool = True,
     ) -> str:
-        """Search pins with fuzzy matching and pagination.
+        """Get detailed pin information for multiple pins by place IDs or exact names.
 
         Args:
-            query: Search term
-            limit: Max results (default: 30, max: 100)
-            offset: Skip N results (default: 0)
-            with_links: Include Google Maps links (default: False)
-        """
-        # Validate
-        if not query or not query.strip():
-            return "Error: query required"
-        if limit < 1:
-            return "Error: limit must be ≥ 1"
-        if limit > 100:
-            limit = 100
-        if offset < 0:
-            return "Error: offset must be ≥ 0"
-
-        all_places = self.ps.search_places(
-            query.strip(), limit + offset + 50
-        )  # Get extra for offset
-        total_found = len(all_places)
-        places = all_places[offset : offset + limit]
-
-        if not places:
-            if offset >= total_found:
-                return f"No results at offset {offset}. Found {total_found} total matches for '{query}'"
-            return f"No matches for '{query}'"
-
-        result = f"Search '{query}': {len(places)}/{total_found} (from #{offset + 1})\n"
-
-        for i, place in enumerate(places, offset + 1):
-            result += f"{i}. {place.name} ({place.list_name})\n"
-            if place.address:
-                result += f"   Address: {place.address}\n"
-            if place.notes:
-                result += f"   Notes: {place.notes}\n"
-
-            if with_links:
-                if place.url:
-                    result += f"   Link: {place.url}\n"
-                elif place.latitude and place.longitude:
-                    result += f"   Maps: https://maps.google.com/?q={place.latitude},{place.longitude}\n"
-
-            result += "\n"
-
-        return result.rstrip()
-
-    def get_pin_details(self, place_name: str, with_links: bool = True) -> str:
-        """Get detailed pin information with links.
-
-        Args:
-            place_name: Name or partial name to find
+            place_ids: List of Google Maps place IDs
+            names: List of exact pin names (fallback for pins without place IDs)
             with_links: Include all available links (default: True)
         """
-        if not place_name or not place_name.strip():
-            return "Error: place name required"
+        if not place_ids and not names:
+            return "Error: Must provide either place_ids or names"
 
-        place_name = place_name.strip()
+        results = []
+        not_found = []
 
-        # Find exact matches first
-        matches = [p for p in self.ps.pins if place_name.lower() in p.name.lower()]
+        # Process place IDs first
+        if place_ids:
+            for pin_id in place_ids:
+                place = self.ps.get_pin_by_place_id(pin_id)
+                if not place:
+                    not_found.append(f"ID:{pin_id}")
+                    continue
+                results.append(self._format_pin_details(place, with_links))
 
-        # Try fuzzy matching if no exact matches
-        if not matches:
-            fuzzy = []
-            for pin in self.ps.pins:
-                similarity = SequenceMatcher(
-                    None, place_name.lower(), pin.name.lower()
-                ).ratio()
-                if similarity > 0.6:
-                    fuzzy.append((pin, similarity))
+        # Process names as fallback
+        if names:
+            for name in names:
+                place = self.ps.get_pin_by_exact_name(name)
+                if not place:
+                    not_found.append(f"Name:{name}")
+                    continue
+                results.append(self._format_pin_details(place, with_links))
 
-            if fuzzy:
-                fuzzy.sort(key=lambda x: x[1], reverse=True)
-                matches = [match[0] for match in fuzzy[:1]]
+        result = "\n".join(results)
+        if not_found:
+            result += f"\nNot found: {', '.join(not_found)}"
 
-        if not matches:
-            # Suggest alternatives
-            suggestions = [
-                p.name
-                for p in self.ps.pins
-                if any(word in p.name.lower() for word in place_name.lower().split())
-            ][:3]
-            if suggestions:
-                return f"Not found: '{place_name}'. Try: {', '.join(suggestions)}"
-            return f"Not found: '{place_name}'"
+        return result
 
-        place = matches[0]
-
-        result = f"{place.name} ({place.list_name})\n"
+    def _format_pin_details(self, place, with_links: bool) -> str:
+        """Format pin details for display"""
+        details = [f"{place.name} ({place.list_name})"]
 
         if place.address:
-            result += f"Address: {place.address}\n"
+            details.append(f"Addr: {place.address}")
         if place.latitude and place.longitude:
-            result += f"Coordinates: {place.latitude:.6f}, {place.longitude:.6f}\n"
+            details.append(f"Coords: {place.latitude:.6f},{place.longitude:.6f}")
         if place.notes:
-            result += f"Notes: {place.notes}\n"
+            details.append(f"Notes: {place.notes}")
+        if place.date_saved:
+            details.append(f"Saved: {place.date_saved}")
 
         if with_links:
             if place.url:
-                result += f"Direct link: {place.url}\n"
+                details.append(f"Direct: {place.url}")
             if place.latitude and place.longitude:
-                result += f"Google Maps: https://maps.google.com/?q={place.latitude},{place.longitude}\n"
+                details.append(
+                    f"Maps: https://maps.google.com/?q={place.latitude},{place.longitude}"
+                )
             if place.place_id:
-                result += f"Place ID link: https://maps.google.com/place?q=place_id:{place.place_id}\n"
+                details.append(
+                    f"PlaceID: https://maps.google.com/place?q=place_id:{place.place_id}"
+                )
 
-        if place.date_saved:
-            result += f"Saved: {place.date_saved}\n"
-
-        return result.rstrip()
+        return " | ".join(details)
 
     def find_pins_near(
         self,
@@ -261,18 +220,26 @@ class PinProvider:
         result = f"Within {radius_km}km: {len(places)}/{total} (from #{offset + 1})\n"
 
         for i, place in enumerate(places, offset + 1):
-            result += f"{i}. {place.name} ({place.list_name})\n"
-            if place.address:
-                result += f"   Address: {place.address}\n"
-            if place.latitude and place.longitude:
-                result += f"   Location: {place.latitude:.4f},{place.longitude:.4f}\n"
+            if place.place_id:
+                result += f"{i}. {place.name} (ID:{place.place_id}) ({place.list_name})"
+            else:
+                result += f"{i}. {place.name} (No ID) ({place.list_name})"
 
+            details = []
+            if place.address:
+                details.append(f"Addr: {place.address}")
+            if place.latitude and place.longitude:
+                details.append(f"Loc: {place.latitude:.4f},{place.longitude:.4f}")
             if with_links:
                 if place.url:
-                    result += f"   Link: {place.url}\n"
+                    details.append(f"Link: {place.url}")
                 elif place.latitude and place.longitude:
-                    result += f"   Maps: https://maps.google.com/?q={place.latitude},{place.longitude}\n"
+                    details.append(
+                        f"Maps: https://maps.google.com/?q={place.latitude},{place.longitude}"
+                    )
 
+            if details:
+                result += f" | {' | '.join(details)}"
             result += "\n"
 
         return result.rstrip()
